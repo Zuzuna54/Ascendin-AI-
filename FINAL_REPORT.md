@@ -631,7 +631,7 @@ sequenceDiagram
     Lambda->>KMS: Validate key not expired (ttl_expires_at check)
     
     alt Key Expired
-        Lambda-->>SQS: Reject message; move to DLQ
+        Lambda-->>SQS: Reject message, move to DLQ
         Lambda->>CloudWatch: Log: "Ephemeral key expired (key_id)"
     else Key Valid
         loop For each s3_key
