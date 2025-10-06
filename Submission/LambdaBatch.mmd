@@ -1,0 +1,53 @@
+sequenceDiagram
+    participant MacApp
+    participant Checkpoint as Checkpoint DB
+    participant Source as Message Source<br/>(iMessage/WhatsApp/IMAP)
+    participant Vault as Local Vault
+    participant S3
+    participant SQSBatch as SQS FIFO Queue<br/>(Batch Priority)
+    participant Lambda
+
+    Note over MacApp,Lambda: Triggered: Onboarding, Mac restart after offline period
+
+    MacApp->>Checkpoint: Load last cursor (ROWID, UID, or message_id)
+    Checkpoint-->>MacApp: {source: "imessage", lastCursor: "98765"}
+
+    loop Batch Processing (100 messages per iteration)
+        MacApp->>Source: Fetch messages WHERE cursor > 98765 LIMIT 100
+        Source-->>MacApp: Return 100 messages
+
+        MacApp->>Vault: Store messages (encrypt, write SQLite)
+        MacApp->>S3: Upload encrypted batch
+        MacApp->>SQSBatch: Enqueue embedding job<br/>(priority=LOW, batchSize=100)
+
+        MacApp->>Checkpoint: Update cursor = 98865
+        Checkpoint-->>MacApp: Committed
+
+        MacApp->>MacApp: Yield 100ms (prevent overheating)
+    end
+
+    SQSBatch->>Lambda: Poll (auto-trigger when messages available)
+    Lambda->>Lambda: Process batch with ephemeral key
+    Lambda->>pgvector: Store encrypted embeddings
+
+    MacApp->>User: "Backlog complete: 10,000 messages indexed"
+
+    %% Styling for dark background with high contrast
+    %%{init: {'theme':'dark', 'themeVariables': { 
+        'actorBkg':'#2563eb',
+        'actorBorder':'#60a5fa',
+        'actorTextColor':'#ffffff',
+        'actorLineColor':'#60a5fa',
+        'signalColor':'#e0e7ff',
+        'signalTextColor':'#e0e7ff',
+        'labelBoxBkgColor':'#1e293b',
+        'labelBoxBorderColor':'#475569',
+        'labelTextColor':'#f1f5f9',
+        'loopTextColor':'#fbbf24',
+        'noteBkgColor':'#065f46',
+        'noteBorderColor':'#10b981',
+        'noteTextColor':'#ffffff',
+        'activationBkgColor':'#7c3aed',
+        'activationBorderColor':'#a78bfa',
+        'sequenceNumberColor':'#ffffff'
+    }}}%%

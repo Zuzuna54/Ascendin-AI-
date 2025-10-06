@@ -1,0 +1,46 @@
+sequenceDiagram
+    participant Source as Message Source<br/>(FSEvents/WebSocket/IMAP)
+    participant MacApp
+    participant Vault
+    participant S3
+    participant SQSLive as SQS Standard Queue<br/>(Live Priority)
+    participant Lambda
+    participant Redis as Redis Pub/Sub
+    participant iPhone
+
+    Note over Source,iPhone: New message arrives (real-time event)
+
+    Source->>MacApp: New message event<br/>(FSEvents, WhatsApp WebSocket, etc.)
+    MacApp->>Vault: Store message immediately (encrypt, SQLite)
+
+    MacApp->>S3: Upload encrypted message (async)
+    MacApp->>SQSLive: Enqueue embedding job<br/>(priority=HIGH, single message)
+
+    MacApp->>Redis: PUBLISH CRDT operation<br/>("message-added", encrypted payload)
+    Redis-->>iPhone: Push notification
+    iPhone->>iPhone: Merge CRDT operation (Automerge)
+    iPhone->>User: Show new message in vault (<5s total)
+
+    SQSLive->>Lambda: Immediate poll (high priority)
+    Lambda->>Lambda: Process with ephemeral key
+    Lambda->>pgvector: Store encrypted embedding
+
+    %% Styling for dark background with high contrast
+    %%{init: {'theme':'dark', 'themeVariables': { 
+        'actorBkg':'#2563eb',
+        'actorBorder':'#60a5fa',
+        'actorTextColor':'#ffffff',
+        'actorLineColor':'#60a5fa',
+        'signalColor':'#e0e7ff',
+        'signalTextColor':'#e0e7ff',
+        'labelBoxBkgColor':'#1e293b',
+        'labelBoxBorderColor':'#475569',
+        'labelTextColor':'#f1f5f9',
+        'loopTextColor':'#fbbf24',
+        'noteBkgColor':'#065f46',
+        'noteBorderColor':'#10b981',
+        'noteTextColor':'#ffffff',
+        'activationBkgColor':'#7c3aed',
+        'activationBorderColor':'#a78bfa',
+        'sequenceNumberColor':'#ffffff'
+    }}}%%

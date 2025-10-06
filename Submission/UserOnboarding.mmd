@@ -1,0 +1,90 @@
+sequenceDiagram
+    actor User
+    participant MacApp as Mac Vault App
+    participant Keychain
+    participant iMsgDB as iMessage DB
+    participant WhatsApp as WhatsApp Server
+    participant IMAP as Email Server
+    participant S3 as Cloud Storage
+    participant SQS as Batch Queue
+    participant Lambda
+
+    Note over User,Lambda: Phase 1: Vault Setup (5 minutes)
+
+    User->>MacApp: Launch app, click "Create Vault"
+    MacApp->>User: Choose storage: Local / iCloud / S3 / Google Drive
+    User->>MacApp: Select AWS S3
+    MacApp->>User: Enter passphrase (12+ chars, complexity)
+    MacApp->>MacApp: PBKDF2(passphrase, 600K iterations) → Master Key (500ms)
+    MacApp->>Keychain: Store Master Key (Secure Enclave encrypted)
+    MacApp->>User: Show 12-word recovery phrase
+    User->>MacApp: Confirm 3 random words (verification)
+    MacApp->>MacApp: Enable biometric unlock (Touch ID/Face ID)
+    MacApp->>User: "Vault created ✓"
+
+    Note over User,Lambda: Phase 2: Connect Platforms (~3 min each)
+
+    User->>MacApp: Connect iMessage
+    MacApp->>MacApp: Check Full Disk Access permission
+    alt Permission Not Granted
+        MacApp->>User: Open System Preferences → Grant Access
+        User->>MacApp: Permission granted
+    end
+    MacApp->>iMsgDB: Test read access to chat.db
+    MacApp->>User: "iMessage connected ✓"
+
+    User->>MacApp: Connect WhatsApp
+    MacApp->>MacApp: Generate QR code (whatsmeow)
+    MacApp->>User: "Scan with your phone"
+    User->>WhatsApp: WhatsApp app → Linked Devices → Scan QR
+    WhatsApp->>MacApp: Send pairing credentials (Signal Protocol)
+    MacApp->>Keychain: Store session keys
+    MacApp->>User: "WhatsApp connected ✓"
+
+    User->>MacApp: Connect Gmail
+    MacApp->>User: Redirect to Google OAuth
+    User->>Gmail: Authorize app (read-only scope)
+    IMAP->>MacApp: Access token + refresh token
+    MacApp->>Keychain: Store encrypted tokens
+    MacApp->>User: "Gmail connected ✓"
+
+    Note over User,Lambda: Phase 3: Historical Backlog (30-60 min)
+
+    MacApp->>iMsgDB: Enumerate history (last 12 months)
+    loop Batch 1000 messages
+        iMsgDB-->>MacApp: Return batch
+        MacApp->>MacApp: Encrypt (AES-256-GCM)
+        MacApp->>S3: Upload encrypted batch
+        MacApp->>SQS: Queue embedding job (100 messages)
+        MacApp->>MacApp: Update checkpoint (last ROWID)
+    end
+
+    SQS->>Lambda: Trigger (auto-poll)
+    Lambda->>S3: Download encrypted batch + ephemeral key
+    Lambda->>Lambda: Decrypt IN MEMORY (5-min TTL key)
+    Lambda->>OpenAI: Generate embeddings (batch of 100)
+    Lambda->>Lambda: Re-encrypt embeddings
+    Lambda->>pgvector: INSERT encrypted embeddings
+    Lambda->>Lambda: Terminate (clear memory)
+
+    MacApp->>User: "Processing: 8,234 / 10,000 messages (83%)"
+
+    %% Styling for dark background with high contrast
+    %%{init: {'theme':'dark', 'themeVariables': { 
+        'actorBkg':'#2563eb',
+        'actorBorder':'#60a5fa',
+        'actorTextColor':'#ffffff',
+        'actorLineColor':'#60a5fa',
+        'signalColor':'#e0e7ff',
+        'signalTextColor':'#e0e7ff',
+        'labelBoxBkgColor':'#1e293b',
+        'labelBoxBorderColor':'#475569',
+        'labelTextColor':'#f1f5f9',
+        'loopTextColor':'#fbbf24',
+        'noteBkgColor':'#065f46',
+        'noteBorderColor':'#10b981',
+        'noteTextColor':'#ffffff',
+        'activationBkgColor':'#7c3aed',
+        'activationBorderColor':'#a78bfa',
+        'sequenceNumberColor':'#ffffff'
+    }}}%%

@@ -1,0 +1,137 @@
+graph TB
+    subgraph "User Devices - Local-First Storage"
+        subgraph "MacBook - Primary Ingestion Gateway"
+            MacApp[Mac Vault App<br/>Swift/SwiftUI]
+            MacIngest[Ingestion Orchestrator]
+            iMsgAdapter[iMessage Adapter<br/>SQLite + FSEvents]
+            WAAdapter[WhatsApp Adapter<br/>whatsmeow library]
+            IMAPAdapter[IMAP/CalDAV Adapter<br/>MailCore2 + OAuth]
+            MacVault[(Local Vault DB<br/>SQLite + FTS5)]
+            MacCRDT[CRDT Engine<br/>Automerge]
+            MacCrypto[Encryption Manager<br/>CryptoKit + Keychain]
+            LocalEmbed[Local Embedding Fallback<br/>Sentence-BERT 80MB]
+        end
+
+        subgraph "iPhone - Consumer + Fallback"
+            iPhoneApp[iPhone Vault App]
+            iPhoneVault[(Local Vault DB<br/>SQLite)]
+            iPhoneCRDT[CRDT Engine]
+            WAFallback[WhatsApp Fallback<br/>Activated if Mac offline >24h]
+        end
+
+        subgraph "iPad - Consumer Only"
+            iPadApp[iPad Vault App]
+            iPadVault[(Local Vault DB)]
+        end
+    end
+
+    subgraph "External Data Sources"
+        WA[WhatsApp Servers<br/>Multi-Device Protocol]
+        iMsgDB[iMessage Database<br/>~/Library/Messages/chat.db]
+        Gmail[Gmail IMAP/CalDAV<br/>OAuth 2.0]
+        Outlook[Outlook IMAP/CalDAV<br/>OAuth 2.0]
+    end
+
+    subgraph "Cloud Backend - Zero-Knowledge Assistance"
+        S3[(S3 Encrypted Blobs<br/>User-Chosen Provider)]
+
+        subgraph "Processing Pipeline"
+            SQSBatch[SQS FIFO Queue<br/>Historical Batches]
+            SQSLive[SQS Standard Queue<br/>Live Messages Priority]
+
+            Lambda[AWS Lambda<br/>Ephemeral Compute]
+            KeyIssuer[Ephemeral Key Service<br/>5-min TTL]
+        end
+
+        subgraph "Data Layer"
+            PG[(PostgreSQL 15+<br/>pgvector + HNSW)]
+            Redis[(Redis 7.2.4<br/>CRDT Pub/Sub)]
+        end
+
+        CloudWatch[CloudWatch<br/>Audit + Metrics]
+    end
+
+    subgraph "AI Services - External"
+        OpenAI[OpenAI API<br/>text-embedding-3-small<br/>1536-dim, 62.3% MTEB]
+    end
+
+    %% Ingestion Flows
+    MacIngest --> iMsgAdapter --> iMsgDB
+    MacIngest --> WAAdapter --> WA
+    MacIngest --> IMAPAdapter --> Gmail
+    MacIngest --> IMAPAdapter --> Outlook
+
+    iMsgAdapter --> MacVault
+    WAAdapter --> MacVault
+    IMAPAdapter --> MacVault
+
+    %% Fallback Flow
+    WAFallback -.->|If Mac offline >24h| WA
+    WAFallback -.->|Handoff when Mac returns| WAAdapter
+
+    %% Encryption & Storage
+    MacVault --> MacCrypto
+    MacCrypto --> S3
+
+    %% Embedding Paths
+    MacVault -->|Batch Jobs| SQSBatch
+    MacVault -->|Live Messages| SQSLive
+    MacVault -.->|If cloud unavailable| LocalEmbed
+
+    SQSBatch --> Lambda
+    SQSLive --> Lambda
+
+    Lambda <-->|Request ephemeral key| KeyIssuer
+    Lambda -->|Plaintext via TLS| OpenAI
+    Lambda -->|Encrypted embeddings| PG
+
+    LocalEmbed -->|Encrypted local embeddings| PG
+
+    %% CRDT Sync
+    MacCRDT <-->|Encrypted operations| Redis
+    iPhoneCRDT <-->|Encrypted operations| Redis
+
+    %% Observability
+    Lambda --> CloudWatch
+    MacIngest --> CloudWatch
+
+    %% User Devices - Blue tones with good contrast
+    style MacApp fill:#2563eb,stroke:#1e40af,stroke-width:3px,color:#fff
+    style iPhoneApp fill:#2563eb,stroke:#1e40af,stroke-width:3px,color:#fff
+    style iPadApp fill:#2563eb,stroke:#1e40af,stroke-width:3px,color:#fff
+    
+    style MacIngest fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff
+    style iMsgAdapter fill:#60a5fa,stroke:#2563eb,stroke-width:2px,color:#000
+    style WAAdapter fill:#60a5fa,stroke:#2563eb,stroke-width:2px,color:#000
+    style IMAPAdapter fill:#60a5fa,stroke:#2563eb,stroke-width:2px,color:#000
+    style WAFallback fill:#60a5fa,stroke:#2563eb,stroke-width:2px,color:#000
+    
+    style MacVault fill:#1e3a8a,stroke:#1e40af,stroke-width:3px,color:#fff
+    style iPhoneVault fill:#1e3a8a,stroke:#1e40af,stroke-width:3px,color:#fff
+    style iPadVault fill:#1e3a8a,stroke:#1e40af,stroke-width:3px,color:#fff
+    
+    style MacCRDT fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff
+    style iPhoneCRDT fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff
+    style MacCrypto fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff
+    style LocalEmbed fill:#0ea5e9,stroke:#0369a1,stroke-width:2px,color:#fff
+    
+    %% External Data Sources - Green tones
+    style WA fill:#16a34a,stroke:#15803d,stroke-width:3px,color:#fff
+    style iMsgDB fill:#16a34a,stroke:#15803d,stroke-width:3px,color:#fff
+    style Gmail fill:#16a34a,stroke:#15803d,stroke-width:3px,color:#fff
+    style Outlook fill:#16a34a,stroke:#15803d,stroke-width:3px,color:#fff
+    
+    %% Cloud Backend - Purple/Orange tones for processing
+    style S3 fill:#7c3aed,stroke:#6d28d9,stroke-width:3px,color:#fff
+    style SQSBatch fill:#f97316,stroke:#ea580c,stroke-width:2px,color:#fff
+    style SQSLive fill:#fb923c,stroke:#f97316,stroke-width:2px,color:#000
+    style Lambda fill:#fbbf24,stroke:#f59e0b,stroke-width:3px,color:#000
+    style KeyIssuer fill:#fcd34d,stroke:#fbbf24,stroke-width:2px,color:#000
+    
+    %% Data Layer - Dark purple/pink for databases
+    style PG fill:#86198f,stroke:#701a75,stroke-width:3px,color:#fff
+    style Redis fill:#ec4899,stroke:#db2777,stroke-width:3px,color:#fff
+    
+    %% Observability & AI - Gray/Cyan tones
+    style CloudWatch fill:#475569,stroke:#334155,stroke-width:3px,color:#fff
+    style OpenAI fill:#06b6d4,stroke:#0891b2,stroke-width:3px,color:#000

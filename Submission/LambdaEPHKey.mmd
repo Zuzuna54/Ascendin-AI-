@@ -1,0 +1,80 @@
+sequenceDiagram
+    participant MacApp
+    participant KeyMgr as Ephemeral Key Manager
+    participant S3 as S3 Staging
+    participant SQS
+    participant Lambda
+    participant KMS as Key Validation Service
+    participant OpenAI
+    participant PG as pgvector DB
+
+    Note over MacApp,PG: Phase 1: Client Issues Ephemeral Key (Mac)
+
+    MacApp->>KeyMgr: Request ephemeral key for batch (100 messages)
+    KeyMgr->>KeyMgr: Generate AES-256 key (SecRandomCopyBytes)
+    KeyMgr->>KeyMgr: Assign key_id, TTL=300s, scope="batch-abc123"
+    KeyMgr-->>MacApp: {key_id, ephemeral_key, expires_at}
+
+    Note over MacApp,PG: Phase 2: Envelope Encryption & Upload
+
+    loop For each message in batch
+        MacApp->>MacApp: Encrypt message with ephemeral_key
+        MacApp->>S3: PUT /staging/batch-abc123/msg-{id}.enc
+    end
+
+    MacApp->>SQS: SendMessage({key_id, ephemeral_key, s3_keys, ttl_expires_at})
+    Note over SQS: Ephemeral key travels IN SQS message body<br/>(SSE-SQS encrypts at rest)
+
+    Note over MacApp,PG: Phase 3: Lambda Ephemeral Processing
+
+    SQS->>Lambda: Poll & invoke (automatic)
+    Lambda->>Lambda: Extract ephemeral_key from SQS message body
+    Lambda->>KMS: Validate key not expired (ttl_expires_at check)
+
+    alt Key Expired
+        Lambda-->>SQS: Reject message, move to DLQ
+        Lambda->>CloudWatch: Log: "Ephemeral key expired (key_id)"
+    else Key Valid
+        loop For each s3_key
+            Lambda->>S3: GET /staging/batch-abc123/msg-{id}.enc
+            S3-->>Lambda: Encrypted message blob
+            Lambda->>Lambda: Decrypt IN MEMORY (ephemeral_key)<br/>NEVER written to disk/logs
+        end
+
+        Lambda->>OpenAI: POST /embeddings (plaintexts array)
+        OpenAI-->>Lambda: Return 1536-dim vectors
+
+        Lambda->>Lambda: Derive user embedding key<br/>HKDF(user_master_key, "embeddings")
+        Lambda->>Lambda: Re-encrypt embeddings (user key)
+
+        Lambda->>PG: INSERT message_embeddings (encrypted)
+        PG-->>Lambda: Success
+
+        Lambda->>S3: DELETE /staging/batch-abc123/* (cleanup)
+        Lambda->>Lambda: Overwrite ephemeral_key with zeros
+        Lambda-->>SQS: Delete message (success acknowledgment)
+        Lambda->>Lambda: Terminate → memory cleared
+    end
+
+    Note over MacApp,PG: Zero-Knowledge Guarantees:<br/>• OpenAI saw plaintext (necessary for embeddings)<br/>• AWS S3/PG saw ONLY encrypted data<br/>• Ephemeral key NEVER persisted server-side<br/>• Lambda logs contain NO sensitive data
+
+    %% Styling for dark background with high contrast
+    %%{init: {'theme':'dark', 'themeVariables': { 
+        'actorBkg':'#2563eb',
+        'actorBorder':'#60a5fa',
+        'actorTextColor':'#ffffff',
+        'actorLineColor':'#60a5fa',
+        'signalColor':'#e0e7ff',
+        'signalTextColor':'#e0e7ff',
+        'labelBoxBkgColor':'#1e293b',
+        'labelBoxBorderColor':'#475569',
+        'labelTextColor':'#f1f5f9',
+        'loopTextColor':'#fbbf24',
+        'altTextColor':'#fb923c',
+        'noteBkgColor':'#065f46',
+        'noteBorderColor':'#10b981',
+        'noteTextColor':'#ffffff',
+        'activationBkgColor':'#7c3aed',
+        'activationBorderColor':'#a78bfa',
+        'sequenceNumberColor':'#ffffff'
+    }}}%%
